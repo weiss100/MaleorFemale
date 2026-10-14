@@ -1,35 +1,49 @@
+import csv
+import os
+
 from sklearn import tree
 from sklearn import svm
 from sklearn import neighbors
 from sklearn.naive_bayes import GaussianNB
 from sklearn.metrics import accuracy_score
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+# data/body_measurements.csv: 340 real measurements (see data/README.md)
+# columns: height_cm, weight_kg, shoe_size_eu, gender
+path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "body_measurements.csv")
+with open(path, newline="") as f:
+    rows = list(csv.DictReader(f))
 
 #[height, weight, shoe_size]
-X = [[181, 80, 44], [177, 70, 43], [160, 60, 38], [154, 54, 37], [166, 65, 40], [190, 90, 47], [175, 64, 39],[177, 70, 40], [159, 55, 37], [171, 75, 42], [181, 85, 43]]
+X = [[int(r["height_cm"]), int(r["weight_kg"]), int(r["shoe_size_eu"])] for r in rows]
+Y = [r["gender"] for r in rows]
 
-Y = ['male', 'male', 'female', 'female', 'male', 'male', 'female', 'female', 'female', 'male', 'male']
+X_train, X_test, Y_train, Y_test = train_test_split(
+    X, Y, test_size=0.3, stratify=Y, random_state=0)
 
-#test data
-X_test=[[198,92,48],[184,84,44],[183,83,44],[166,47,36],[170,60,38],[172,64,39],[182,80,42],[180,80,43]]
-Y_test=['male','male','male','female','female','female','male','male']
-
+# SVM and KNN depend on feature scales (cm vs. kg vs. shoe size), so they get a scaler
 classifiers = {
     "Decision Tree": tree.DecisionTreeClassifier(random_state=0),
-    "SVM": svm.SVC(),
+    "SVM": make_pipeline(StandardScaler(), svm.SVC()),
     "Naive Bayes": GaussianNB(),
-    "K neighbors": neighbors.KNeighborsClassifier(),
+    "K neighbors": make_pipeline(StandardScaler(), neighbors.KNeighborsClassifier()),
 }
 
-# train every classifier and measure its accuracy on the test data
-accuracies = {}
+# test accuracy on the held-out split, plus 5-fold cross-validation on all data
+# (a single split of 102 test samples is still noisy)
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+test_acc, cv_acc = {}, {}
 for name, clf in classifiers.items():
-    clf.fit(X, Y)
-    prediction = clf.predict(X_test)
-    accuracies[name] = accuracy_score(Y_test, prediction)
-    print("Prediction for %s : %s" % (name, prediction))
-    print("Accuracy for %s : %s" % (name, accuracies[name]))
+    clf.fit(X_train, Y_train)
+    test_acc[name] = accuracy_score(Y_test, clf.predict(X_test))
+    scores = cross_val_score(clf, X, Y, cv=cv)
+    cv_acc[name] = scores.mean()
+    print("%-14s test accuracy: %.3f | 5-fold CV: %.3f (+/- %.3f)"
+          % (name, test_acc[name], cv_acc[name], scores.std()))
 
-# compare the results and print the best one(s); ties are reported, not hidden
-best_accuracy = max(accuracies.values())
-best = [name for name, acc in accuracies.items() if acc == best_accuracy]
-print("Best classifier: %s (accuracy %s)" % (", ".join(best), best_accuracy))
+# the best classifier is picked by cross-validation, not by the single split
+best_accuracy = max(cv_acc.values())
+best = [name for name, acc in cv_acc.items() if acc == best_accuracy]
+print("Best classifier (CV): %s (%.3f)" % (", ".join(best), best_accuracy))
